@@ -23,19 +23,15 @@ uses an OIDC identity token and does not require a long-lived npm publish token.
 
 ## First publication
 
-npm can only configure a trusted publisher after a package exists. Bootstrap all
-seven packages once before enabling the regular release job:
+The initial publication and Trusted Publishing setup for all seven packages was
+completed on July 17, 2026. The temporary bootstrap workflow, GitHub environment
+secret, and npm token were removed after an OIDC-only prerelease succeeded.
 
-1. Sign in to npm with an account that has publish access to the `norehq`
-   organization and has two-factor authentication enabled.
-2. Create a short-lived granular access token with read/write access to the
-   `@norehq` scope and bypass 2FA enabled.
-3. Save it temporarily as the `NPM_BOOTSTRAP_TOKEN` secret in the GitHub `npm`
-   environment.
-4. Run the `Bootstrap npm Packages` workflow for an existing GitHub Release tag.
-5. Configure the GitHub Actions trusted publisher shown above for every package.
-6. Delete the bootstrap secret and revoke its npm token after a trusted publish
-   succeeds.
+npm can only configure a trusted publisher after a package exists. If a new
+package is added later, temporarily reintroduce a manual bootstrap workflow that
+uses a short-lived granular access token restricted to the `@norehq` scope.
+Publish the new package once, configure its trusted publisher, verify an
+OIDC-only publish, and then delete the workflow, secret, and token again.
 
 With npm 11.15 or newer, the trusted publishers can be configured in one login
 session:
@@ -62,10 +58,9 @@ for package in "${packages[@]}"; do
 done
 ```
 
-Set the repository variable `NPM_PUBLISH_ENABLED=true` only after all seven
-trusted publishers are configured. The publish script checks the registry before
-each package, so rerunning a partially completed release skips versions that are
-already present.
+The repository variable `NPM_PUBLISH_ENABLED=true` enables the regular release
+job. The publish script checks the registry before each package, so rerunning a
+partially completed release skips versions that are already present.
 
 The release job publishes platform packages first and the root package last,
 so `@norehq/cli` never references platform versions that have not been
