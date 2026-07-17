@@ -1,0 +1,17 @@
+{
+  "command": "nore",
+  "rootPackage": "@norehq/cli",
+  "platformPackagePrefix": "@norehq/cli",
+  "description": "Manage Nore sites and releases from a terminal or AI agent.",
+  "license": "Apache-2.0",
+  "repository": "https://github.com/norehq/cli.git",
+  "homepage": "https://nore.sh/",
+  "bugs": "https://github.com/norehq/cli/issues",
+  "registry": "https://registry.npmjs.org/",
+  "node": ">=22.14.0",
+  "trustedPublishing": {
+    "repository": "norehq/cli",
+    "workflow": "release.yml",
+    "environment": "npm"
+  }
+}

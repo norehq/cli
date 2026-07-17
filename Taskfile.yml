@@ -1,0 +1,72 @@
+version: "3"
+
+tasks:
+  default:
+    desc: Run the local quality checks
+    cmds:
+      - task: check
+
+  format:
+    desc: Format Go code and organize imports
+    cmd: go tool goimports -w .
+
+  lint:
+    desc: Run Staticcheck
+    cmd: go tool staticcheck ./...
+
+  test:
+    desc: Run all Go tests
+    cmd: go test ./...
+
+  check:
+    desc: Format, lint, and test the CLI
+    cmds:
+      - task: format
+      - task: lint
+      - task: test
+
+  build:
+    desc: Build the CLI for the current platform
+    dir: dist
+    cmd: go build -trimpath -o ./nore{{exeExt}} ../cmd/nore
+
+  build-info:
+    desc: Inspect metadata embedded in a local CLI build
+    deps:
+      - build
+    dir: dist
+    cmds:
+      - go version -m ./nore{{exeExt}}
+      - ./nore{{exeExt}} --version --json
+
+  release-check:
+    desc: Validate release configuration without publishing
+    cmds:
+      - goreleaser check
+      - task: npm-test
+
+  release-snapshot:
+    desc: Build release artifacts locally without publishing
+    cmd: goreleaser release --snapshot --clean
+
+  npm-test:
+    desc: Test the npm release tooling
+    cmd: node --test npm/scripts/lib.test.mjs
+
+  npm-package:
+    desc: Build npm packages from archives in dist
+    requires:
+      vars:
+        - VERSION
+    cmd: node npm/scripts/build-packages.mjs --version {{.VERSION}}
+
+  npm-package-check:
+    desc: Build and verify npm packages without publishing
+    requires:
+      vars:
+        - VERSION
+    cmds:
+      - task: npm-package
+        vars:
+          VERSION: "{{.VERSION}}"
+      - node npm/scripts/verify-packages.mjs
