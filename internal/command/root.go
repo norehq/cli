@@ -34,6 +34,7 @@ type app struct {
 	showVersion     bool
 	stderr          io.Writer
 	stdout          io.Writer
+	updater         updateService
 	verbose         bool
 }
 
@@ -52,6 +53,7 @@ func Execute(args []string, stdout, stderr io.Writer) int {
 		noColor:         noColorByDefault() || containsEnabledFlag(args, "no-color"),
 		stderr:          stderr,
 		stdout:          stdout,
+		updater:         newGitHubUpdateService(),
 		verbose:         containsEnabledFlag(args, "verbose"),
 	}
 	root := application.rootCommand()
@@ -110,6 +112,7 @@ func (a *app) rootCommand() *cobra.Command {
 		a.siteCommand(),
 		a.postCommand(),
 		a.releaseCommand(),
+		a.updateCommand(),
 	)
 	return root
 }

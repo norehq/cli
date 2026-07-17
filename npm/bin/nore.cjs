@@ -30,8 +30,45 @@ try {
 
 const binaryName = process.platform === "win32" ? "nore.exe" : "nore"
 const binaryPath = join(dirname(packageManifest), "bin", binaryName)
+
+const packageManagerName = value => {
+  const [agent = ""] = String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+  const [name] = agent.split(/[\/@]/)
+  return ["bun", "npm", "pnpm", "yarn"].includes(name) ? name : ""
+}
+
+const detectPackageManager = () => {
+  const fromUserAgent = packageManagerName(process.env.npm_config_user_agent)
+  if (fromUserAgent) return fromUserAgent
+
+  const paths = [
+    process.argv[1],
+    __filename,
+    packageManifest,
+    process.env.npm_execpath,
+    process.env.PNPM_HOME,
+    process.env.BUN_INSTALL,
+  ]
+    .filter(Boolean)
+    .join("\n")
+    .replaceAll("\\", "/")
+    .toLowerCase()
+
+  if (paths.includes("pnpm")) return "pnpm"
+  if (paths.includes("/.bun/") || paths.includes("/bun/install/")) return "bun"
+  if (paths.includes("/.yarn/") || paths.includes("/yarn/")) return "yarn"
+  return "npm"
+}
+
 const result = spawnSync(binaryPath, process.argv.slice(2), {
-  env: process.env,
+  env: {
+    ...process.env,
+    NORE_INSTALL_METHOD: "npm",
+    NORE_PACKAGE_MANAGER: detectPackageManager(),
+  },
   stdio: "inherit",
   windowsHide: false,
 })
