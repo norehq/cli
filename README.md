@@ -1,83 +1,92 @@
 # Nore CLI
 
-Nore CLI manages Nore sites, posts, and releases from a terminal or AI agent.
-It is a standalone Go application distributed as native binaries and through
-the `@norehq/cli` npm package.
+[nore.sh](https://nore.sh)
+
+Nore CLI connects your terminal or coding agent to Nore. Use it to sign in,
+inspect sites and posts, create releases, follow publishing logs, and install
+the bundled Nore skill for supported coding agents.
 
 ## Install
+
+### npm (recommended)
 
 ```sh
 npm install --global @norehq/cli
 ```
 
-## Quick start
+This installs the native binary for your platform. Node.js 22.14 or later is
+required.
+
+### macOS and Linux
+
+```sh
+curl -fsSL https://nore.sh/install.sh | sh
+```
+
+The installer downloads the latest GitHub Release, verifies its checksum, and
+installs `nore` into `~/.local/bin`.
+
+### Windows PowerShell
+
+```powershell
+irm https://nore.sh/install.ps1 | iex
+```
+
+The installer supports Windows PowerShell 5.1 and PowerShell 7, verifies the
+download, and adds Nore CLI to your user `PATH`.
+
+## Update
+
+```sh
+nore update
+```
+
+The command checks the latest stable GitHub release. npm installations receive
+the matching npm, Yarn, pnpm, or Bun update command; native macOS and Linux
+installations update in place; Windows installations receive the PowerShell
+command to run.
+
+## Get started
 
 ```sh
 nore login
-nore skill update --client codex
-nore whoami
 nore site list
 nore post list --site <site>
 nore release create --site <site>
 ```
 
-`<site>` can be a site UUID or ident. Release creation follows publishing logs
-for up to three minutes unless `--non-interactive` is passed.
+`nore login` opens a browser-assisted sign-in flow. Replace `<site>` with a site
+UUID or ident. When you create a release, the CLI follows its publishing logs
+and reports the final result.
 
-## Agent skill
+## Use with coding agents
 
-Install the skill bundled with the CLI for every detected supported coding
-agent:
+Install or update the bundled Nore skill for detected coding agents:
 
 ```sh
 nore skill update
 ```
 
-Pass `--client codex`, `--client claude`, `--client cursor`, or `--client all`
-to select targets explicitly. Updating replaces the installed user-level Nore
-skill with the version bundled in the current CLI. Inspect that source without
-installing it with `nore skill show`; both commands support `--json`.
+Pass `--client` to target a specific agent. The installed skill teaches the
+agent how to work with Nore through the CLI and its machine-readable JSON
+output.
 
-## Authentication
+## Automation and CI
 
-`nore login` opens a browser-assisted PKCE flow and saves a 30-day grant. Use
-`nore logout` to revoke that grant and remove it locally.
-
-For CI or an agent, provide a Person Token without writing it to disk:
+Provide a Nore Person Token through the environment when an interactive browser
+login is not available:
 
 ```sh
 export NORE_TOKEN="nore_pat_..."
 nore site list --json
 ```
 
-To save a Person Token locally:
+`NORE_TOKEN` takes precedence over locally saved credentials. Add `--json` when
+another program or agent will consume the output.
+
+## Help
 
 ```sh
-nore config set token "nore_pat_..."
-nore config unset token
+nore --help
+nore release --help
 ```
-
-Token precedence is `NORE_TOKEN`, saved Person Token, then browser login.
-
-## Commands
-
-| Command                                                | Purpose                                       |
-| ------------------------------------------------------ | --------------------------------------------- |
-| `nore login`                                           | Sign in through the browser                   |
-| `nore logout`                                          | Revoke the browser grant and clear it locally |
-| `nore whoami`                                          | Show the authenticated identity               |
-| `nore config show`                                     | Show paths and effective registry             |
-| `nore config set token <token>`                        | Save a Person Token                           |
-| `nore config unset token`                              | Remove the saved Person Token                 |
-| `nore skill update [--client <client>]`                | Install or update the bundled agent skill     |
-| `nore skill show`                                      | Print the bundled agent skill                 |
-| `nore site list`                                       | List authorized sites                         |
-| `nore site get --site <site>`                          | Inspect a site                                |
-| `nore post list --site <site>`                         | Browse and search posts                       |
-| `nore post get --site <site> --post <id>`              | Inspect a post                                |
-| `nore release create --site <site>`                    | Create and follow a release                   |
-| `nore release list --site <site>`                      | List release history                          |
-| `nore release get --site <site> --release <id> --logs` | Inspect a release and its logs                |
-
-Add `--json` for machine-readable output. Release failures exit with status 1;
-a follow timeout exits with status 2.

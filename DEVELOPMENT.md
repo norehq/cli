@@ -53,6 +53,3 @@ Pushing an annotated `v*` tag publishes the GitHub Release, six native npm
 platform packages, and the `@norehq/cli` root package. npm Trusted Publishing
 must be configured for the `norehq/cli` repository, `release.yml` workflow,
 and `npm` GitHub environment.
-
-See [NPM_PUBLISHING.md](./NPM_PUBLISHING.md) for the one-time npm setup and
-package list.
