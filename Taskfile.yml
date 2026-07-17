@@ -51,7 +51,7 @@ tasks:
 
   npm-test:
     desc: Test the npm release tooling
-    cmd: node --test npm/scripts/lib.test.mjs
+    cmd: node --test npm/scripts/*.test.mjs
 
   npm-package:
     desc: Build npm packages from archives in dist

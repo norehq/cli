@@ -1,57 +1,30 @@
-name: Release
+name: Bootstrap npm Packages
 
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GitHub Release tag to publish to npm
+        required: true
+        default: v0.1.0
+        type: string
 
 concurrency:
-  group: release
+  group: npm-bootstrap
   cancel-in-progress: false
 
-permissions: {}
+permissions:
+  contents: read
+  id-token: write
 
 jobs:
-  github-release:
-    name: Publish GitHub Release
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: write
-    steps:
-      - name: Check out release tag
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-
-      - name: Build and publish release artifacts
-        uses: goreleaser/goreleaser-action@v7
-        with:
-          distribution: goreleaser
-          version: v2.17.0
-          args: release --clean
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-  npm:
-    name: Publish npm packages
-    if: vars.NPM_PUBLISH_ENABLED == 'true'
-    needs: github-release
+  publish:
+    name: Publish Initial npm Packages
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: npm
-    permissions:
-      contents: read
-      id-token: write
     steps:
-      - name: Check out release tag
+      - name: Check out publishing tools
         uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -69,9 +42,10 @@ jobs:
       - name: Download GitHub Release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           mkdir -p dist/release
-          gh release download "$GITHUB_REF_NAME" \
+          gh release download "$RELEASE_TAG" \
             --repo "$GITHUB_REPOSITORY" \
             --dir dist/release
 
@@ -79,14 +53,18 @@ jobs:
         run: node --test npm/scripts/*.test.mjs
 
       - name: Build npm packages
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         run: |
           node npm/scripts/build-packages.mjs \
-            --version "$GITHUB_REF_NAME" \
+            --version "$RELEASE_TAG" \
             --assets dist/release \
             --output dist/npm
 
       - name: Verify npm packages
         run: node npm/scripts/verify-packages.mjs --directory dist/npm
 
-      - name: Publish npm packages with Trusted Publishing
+      - name: Publish initial packages with a temporary token
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_BOOTSTRAP_TOKEN }}
         run: node npm/scripts/publish-packages.mjs --directory dist/npm
