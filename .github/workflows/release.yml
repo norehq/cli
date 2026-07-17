@@ -42,6 +42,7 @@ jobs:
 
   npm:
     name: Publish npm packages
+    if: vars.NPM_PUBLISH_ENABLED == 'true'
     needs: github-release
     runs-on: ubuntu-latest
     timeout-minutes: 20
