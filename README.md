@@ -51,12 +51,14 @@ command to run.
 ```sh
 nore login
 nore site list
-nore post list --site <site>
-nore release create --site <site>
+nore post list
+nore release create
 ```
 
-`nore login` opens a browser-assisted sign-in flow. Replace `<site>` with a site
-UUID or ident. When you create a release, the CLI follows its publishing logs
+`nore login` opens a browser-assisted sign-in flow. When `--site` is omitted in
+an interactive terminal, the CLI lists the authorized sites and prompts you to
+select one before continuing. Pass `--site <site>` with a site UUID or ident to
+skip the prompt. When you create a release, the CLI follows its publishing logs
 and reports the final result.
 
 ## Use with coding agents
@@ -79,10 +81,14 @@ login is not available:
 ```sh
 export NORE_TOKEN="nore_pat_..."
 nore site list --json
+nore post list --site <site> --json
 ```
 
-`NORE_TOKEN` takes precedence over locally saved credentials. Add `--json` when
-another program or agent will consume the output.
+`NORE_TOKEN` takes precedence over locally saved credentials for the configured
+registry; it does not change the request destination. Add `--json` when another
+program or agent will consume the output. JSON and non-interactive commands do
+not prompt for a site; list the available sites first and pass one explicitly
+with `--site`.
 
 ## Help
 

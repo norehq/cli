@@ -35,7 +35,7 @@ func (a *app) postListCommand() *cobra.Command {
 		Short: "List posts",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			site, err := required(siteInput, "site")
+			site, err := a.resolveSite(command.Context(), siteInput, false)
 			if err != nil {
 				return err
 			}
@@ -106,7 +106,7 @@ func (a *app) postGetCommand() *cobra.Command {
 		Short: "Inspect one post",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			site, err := required(siteInput, "site")
+			site, err := a.resolveSite(command.Context(), siteInput, false)
 			if err != nil {
 				return err
 			}

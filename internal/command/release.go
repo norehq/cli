@@ -48,7 +48,7 @@ func (a *app) releaseCreateCommand() *cobra.Command {
 		Short: "Submit a release",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			site, err := required(siteInput, "site")
+			site, err := a.resolveSite(command.Context(), siteInput, nonInteractive)
 			if err != nil {
 				return err
 			}
@@ -102,7 +102,7 @@ func (a *app) releaseListCommand() *cobra.Command {
 		Short: "List releases",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			site, err := required(siteInput, "site")
+			site, err := a.resolveSite(command.Context(), siteInput, false)
 			if err != nil {
 				return err
 			}
@@ -160,7 +160,7 @@ func (a *app) releaseGetCommand() *cobra.Command {
 		Short: "Inspect one release",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			site, err := required(siteInput, "site")
+			site, err := a.resolveSite(command.Context(), siteInput, false)
 			if err != nil {
 				return err
 			}

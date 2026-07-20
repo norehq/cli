@@ -34,6 +34,7 @@ type app struct {
 	showVersion     bool
 	stderr          io.Writer
 	stdout          io.Writer
+	siteSelector    siteSelector
 	updater         updateService
 	verbose         bool
 }
