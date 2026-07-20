@@ -1,7 +1,6 @@
 package command
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/norehq/cli/internal/config"
@@ -84,10 +83,9 @@ func (a *app) configPathCommand() *cobra.Command {
 }
 
 func (a *app) configGetCommand() *cobra.Command {
-	command := &cobra.Command{Use: "get", Short: "Get a configuration value", Args: cobra.NoArgs}
-	command.AddCommand(&cobra.Command{
-		Use:   "registry",
-		Short: "Get the effective registry",
+	command := &cobra.Command{
+		Use:   "get",
+		Short: "Get configuration values",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			registry, err := a.registry()
@@ -96,88 +94,119 @@ func (a *app) configGetCommand() *cobra.Command {
 			}
 			return a.printer().Success(map[string]any{"registry": registry}, registry)
 		},
-	})
+	}
+	command.Flags().Bool("registry", false, "get the effective registry")
+	command.Flags().SortFlags = false
+	command.MarkFlagsOneRequired("registry")
 	return command
 }
 
 func (a *app) configSetCommand() *cobra.Command {
-	command := &cobra.Command{Use: "set", Short: "Set a configuration value", Args: cobra.NoArgs}
-	command.AddCommand(
-		&cobra.Command{
-			Use:   "token <token>",
-			Short: "Save a manually created token",
-			Args:  cobra.MinimumNArgs(1),
-			RunE: func(command *cobra.Command, args []string) error {
-				token := strings.TrimSpace(strings.Join(args, " "))
-				if token == "" {
-					return newCommandError("INVALID_TOKEN", "Token cannot be empty.", nil)
-				}
-				ctx, cancel := a.context(command.Context())
-				defer cancel()
-				if err := a.saveCredentials(ctx, store.Credentials{ManualToken: token}); err != nil {
-					return err
-				}
-				return a.printer().Success(
-					map[string]any{"configured": true, "source": "credentials"},
-					a.printer().Done("Token saved."),
-				)
-			},
-		},
-		&cobra.Command{
-			Use:   "registry <url>",
-			Short: "Set the registry URL",
-			Args:  cobra.ExactArgs(1),
-			RunE: func(_ *cobra.Command, args []string) error {
-				registry, err := a.configStore.SetRegistry(args[0])
+	var registryInput string
+	var tokenInput string
+	command := &cobra.Command{
+		Use:   "set",
+		Short: "Set configuration values",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			setRegistry := command.Flags().Changed("registry")
+			setToken := command.Flags().Changed("token")
+			token := strings.TrimSpace(tokenInput)
+			if setToken && token == "" {
+				return newCommandError("INVALID_TOKEN", "Token cannot be empty.", nil)
+			}
+			registry := ""
+			var err error
+			if setRegistry {
+				registry, err = a.configStore.SetRegistry(registryInput)
 				if err != nil {
 					return newCommandError("INVALID_REGISTRY", "The registry URL is invalid.", err.Error())
 				}
-				return a.printer().Success(map[string]any{"registry": registry}, a.printer().Done("Registry set to "+registry))
-			},
+			} else {
+				registry, err = a.registry()
+				if err != nil {
+					return err
+				}
+			}
+			if setToken {
+				ctx, cancel := a.context(command.Context())
+				defer cancel()
+				if err := a.updateCredentials(ctx, func(credentials *store.Credentials) error {
+					registryCredentials, err := credentials.ForRegistry(registry)
+					if err != nil {
+						return err
+					}
+					credentials.LegacyManualToken = ""
+					registryCredentials.ManualToken = token
+					registryCredentials.OAuth = nil
+					return credentials.SetRegistry(registry, registryCredentials)
+				}); err != nil {
+					return err
+				}
+			}
+			result := make(map[string]any)
+			messages := make([]string, 0, 2)
+			if setRegistry {
+				result["registry"] = registry
+				messages = append(messages, a.printer().Done("Registry set to "+registry))
+			}
+			if setToken {
+				result["configured"] = true
+				result["source"] = "credentials"
+				messages = append(messages, a.printer().Done("Token saved."))
+			}
+			return a.printer().Success(result, strings.Join(messages, "\n"))
 		},
-	)
+	}
+	command.Flags().StringVar(&registryInput, "registry", "", "registry URL")
+	command.Flags().StringVar(&tokenInput, "token", "", "manually created token")
+	command.Flags().SortFlags = false
+	command.MarkFlagsOneRequired("registry", "token")
 	return command
 }
 
 func (a *app) configUnsetCommand() *cobra.Command {
-	command := &cobra.Command{Use: "unset", Short: "Unset a configuration value", Args: cobra.NoArgs}
-	command.AddCommand(&cobra.Command{
-		Use:   "token",
-		Short: "Remove the saved manual token",
+	command := &cobra.Command{
+		Use:   "unset",
+		Short: "Unset configuration values",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			registry, err := a.registry()
+			if err != nil {
+				return err
+			}
 			ctx, cancel := a.context(command.Context())
 			defer cancel()
-			if _, err := a.credentialStore.MigrateLegacy(ctx); err != nil {
-				return credentialStoreError(err)
+			configured := false
+			if err := a.updateCredentials(ctx, func(credentials *store.Credentials) error {
+				registryCredentials, err := credentials.ForRegistry(registry)
+				if err != nil {
+					return err
+				}
+				configured = registryCredentials.ManualToken != "" || credentials.LegacyManualToken != ""
+				credentials.LegacyManualToken = ""
+				registryCredentials.ManualToken = ""
+				return credentials.SetRegistry(registry, registryCredentials)
+			}); err != nil {
+				return err
 			}
-			lock, err := a.credentialStore.Lock(ctx)
-			if err != nil {
-				return credentialStoreError(err)
+			message := a.printer().Done("No saved token.")
+			if configured {
+				message = a.printer().Done("Token removed.")
 			}
-			defer lock.Unlock()
-			credentials, err := a.credentialStore.Load()
-			if errors.Is(err, store.ErrNotConfigured) {
-				return a.printer().Success(map[string]any{"configured": false}, a.printer().Done("No saved token."))
-			}
-			if err != nil {
-				return credentialStoreError(err)
-			}
-			credentials.ManualToken = ""
-			if err := a.credentialStore.Save(credentials); err != nil {
-				return credentialStoreError(err)
-			}
-			return a.printer().Success(map[string]any{"configured": false}, a.printer().Done("Token removed."))
+			return a.printer().Success(map[string]any{"configured": false}, message)
 		},
-	})
+	}
+	command.Flags().Bool("token", false, "remove the configured registry's saved token")
+	command.Flags().SortFlags = false
+	command.MarkFlagsOneRequired("token")
 	return command
 }
 
 func (a *app) configResetCommand() *cobra.Command {
-	command := &cobra.Command{Use: "reset", Short: "Reset a configuration value", Args: cobra.NoArgs}
-	command.AddCommand(&cobra.Command{
-		Use:   "registry",
-		Short: "Reset the registry URL",
+	command := &cobra.Command{
+		Use:   "reset",
+		Short: "Reset configuration values",
 		Args:  cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			if err := a.configStore.ResetRegistry(); err != nil {
@@ -188,6 +217,9 @@ func (a *app) configResetCommand() *cobra.Command {
 				a.printer().Done("Registry reset to "+config.DefaultRegistry),
 			)
 		},
-	})
+	}
+	command.Flags().Bool("registry", false, "reset the registry URL")
+	command.Flags().SortFlags = false
+	command.MarkFlagsOneRequired("registry")
 	return command
 }

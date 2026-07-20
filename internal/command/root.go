@@ -39,9 +39,8 @@ type app struct {
 }
 
 type authorization struct {
-	kind     string
-	registry string
-	token    string
+	kind  string
+	token string
 }
 
 func Execute(args []string, stdout, stderr io.Writer) int {
@@ -178,11 +177,15 @@ func (a *app) authenticatedRequest(
 	input any,
 	result any,
 ) error {
-	authorization, err := a.authorization(ctx)
+	registry, err := a.registry()
 	if err != nil {
 		return err
 	}
-	err = a.client(authorization.registry).Do(
+	authorization, err := a.authorization(ctx, registry)
+	if err != nil {
+		return err
+	}
+	err = a.client(registry).Do(
 		ctx,
 		method,
 		path,
@@ -196,11 +199,11 @@ func (a *app) authenticatedRequest(
 	if !isUnauthorized(err) || authorization.kind != "oauth" {
 		return apiCommandError(err)
 	}
-	refreshed, refreshErr := a.oauthAuthorization(ctx, authorization.token)
+	refreshed, refreshErr := a.oauthAuthorization(ctx, registry, authorization.token)
 	if refreshErr != nil {
 		return refreshErr
 	}
-	err = a.client(refreshed.registry).Do(
+	err = a.client(registry).Do(
 		ctx,
 		method,
 		path,
@@ -214,16 +217,9 @@ func (a *app) authenticatedRequest(
 	return nil
 }
 
-func (a *app) authorization(ctx context.Context) (authorization, error) {
-	registry, err := a.registry()
-	if err != nil {
-		return authorization{}, err
-	}
+func (a *app) authorization(ctx context.Context, registry string) (authorization, error) {
 	if token := strings.TrimSpace(os.Getenv("NORE_TOKEN")); token != "" {
-		return authorization{kind: "environment", registry: registry, token: token}, nil
-	}
-	if _, err := a.credentialStore.MigrateLegacy(ctx); err != nil {
-		return authorization{}, newCommandError("CREDENTIAL_MIGRATION_FAILED", "Saved CLI credentials could not be migrated.", err.Error())
+		return authorization{kind: "environment", token: token}, nil
 	}
 	credentials, err := a.credentialStore.Load()
 	if errors.Is(err, store.ErrNotConfigured) {
@@ -232,14 +228,56 @@ func (a *app) authorization(ctx context.Context) (authorization, error) {
 	if err != nil {
 		return authorization{}, credentialStoreError(err)
 	}
-	if token := strings.TrimSpace(credentials.ManualToken); token != "" {
-		return authorization{kind: "manual", registry: registry, token: token}, nil
+	registryCredentials, err := credentials.ForRegistry(registry)
+	if err != nil {
+		return authorization{}, newCommandError("CREDENTIAL_INVALID", "Saved CLI credentials contain an invalid registry.", err.Error())
 	}
-	return a.oauthAuthorization(ctx, "")
+	if token := strings.TrimSpace(registryCredentials.ManualToken); token != "" {
+		return authorization{kind: "manual", token: token}, nil
+	}
+	if registryCredentials.OAuth == nil {
+		if credentials.LegacyManualToken != "" {
+			return authorization{}, legacyManualTokenError()
+		}
+		return authorization{}, notLoggedInError()
+	}
+	return a.oauthAuthorizationFromCredentials(ctx, registry, "", credentials)
 }
 
 func (a *app) oauthAuthorization(
 	ctx context.Context,
+	registry string,
+	rejectedAccessToken string,
+) (authorization, error) {
+	credentials, err := a.credentialStore.Load()
+	if errors.Is(err, store.ErrNotConfigured) {
+		return authorization{}, notLoggedInError()
+	}
+	if err != nil {
+		return authorization{}, credentialStoreError(err)
+	}
+	return a.oauthAuthorizationFromCredentials(ctx, registry, rejectedAccessToken, credentials)
+}
+
+func (a *app) oauthAuthorizationFromCredentials(
+	ctx context.Context,
+	registry string,
+	rejectedAccessToken string,
+	credentials store.Credentials,
+) (authorization, error) {
+	result, oauth, err := oauthAuthorizationState(credentials, registry, rejectedAccessToken)
+	if err != nil {
+		return authorization{}, err
+	}
+	if oauth == nil {
+		return result, nil
+	}
+	return a.refreshOAuthAuthorization(ctx, registry, rejectedAccessToken)
+}
+
+func (a *app) refreshOAuthAuthorization(
+	ctx context.Context,
+	registry string,
 	rejectedAccessToken string,
 ) (result authorization, err error) {
 	lock, err := a.credentialStore.Lock(ctx)
@@ -252,27 +290,18 @@ func (a *app) oauthAuthorization(
 		}
 	}()
 	credentials, err := a.credentialStore.Load()
-	if errors.Is(err, store.ErrNotConfigured) || (err == nil && credentials.OAuth == nil) {
+	if errors.Is(err, store.ErrNotConfigured) {
 		return authorization{}, notLoggedInError()
 	}
 	if err != nil {
 		return authorization{}, credentialStoreError(err)
 	}
-	oauth := credentials.OAuth
-	registryValue := oauth.Registry
-	if strings.TrimSpace(registryValue) == "" {
-		registryValue = config.DefaultRegistry
-	}
-	registry, err := config.NormalizeRegistry(registryValue)
+	result, oauth, err := oauthAuthorizationState(credentials, registry, rejectedAccessToken)
 	if err != nil {
-		return authorization{}, newCommandError("CREDENTIAL_INVALID", "Saved CLI credentials contain an invalid registry.", err.Error())
+		return authorization{}, err
 	}
-	if accessTokenReady(*oauth) && (rejectedAccessToken == "" || oauth.AccessToken != rejectedAccessToken) {
-		return authorization{kind: "oauth", registry: registry, token: oauth.AccessToken}, nil
-	}
-	refreshExpiresAt, parseErr := time.Parse(time.RFC3339Nano, oauth.RefreshExpiresAt)
-	if parseErr != nil || !refreshExpiresAt.After(time.Now()) {
-		return authorization{}, newCommandError("AUTHORIZATION_EXPIRED", "Your CLI authorization expired. Run \"nore login\" again.", nil)
+	if oauth == nil {
+		return result, nil
 	}
 	response, err := a.client(registry).Refresh(ctx, oauth.RefreshToken)
 	if err != nil {
@@ -282,11 +311,41 @@ func (a *app) oauthAuthorization(
 	oauth.AccessToken = response.AccessToken
 	oauth.RefreshExpiresAt = response.RefreshExpiresAt.Format(time.RFC3339Nano)
 	oauth.RefreshToken = response.RefreshToken
-	oauth.Registry = registry
 	if err := a.credentialStore.Save(credentials); err != nil {
 		return authorization{}, credentialStoreError(err)
 	}
-	return authorization{kind: "oauth", registry: registry, token: oauth.AccessToken}, nil
+	return authorization{kind: "oauth", token: oauth.AccessToken}, nil
+}
+
+func oauthAuthorizationState(
+	credentials store.Credentials,
+	registry string,
+	rejectedAccessToken string,
+) (authorization, *store.OAuthCredentials, error) {
+	registryCredentials, err := credentials.ForRegistry(registry)
+	if err != nil {
+		return authorization{}, nil, newCommandError(
+			"CREDENTIAL_INVALID",
+			"Saved CLI credentials contain an invalid registry.",
+			err.Error(),
+		)
+	}
+	oauth := registryCredentials.OAuth
+	if oauth == nil {
+		return authorization{}, nil, notLoggedInError()
+	}
+	if accessTokenReady(*oauth) && (rejectedAccessToken == "" || oauth.AccessToken != rejectedAccessToken) {
+		return authorization{kind: "oauth", token: oauth.AccessToken}, nil, nil
+	}
+	refreshExpiresAt, parseErr := time.Parse(time.RFC3339Nano, oauth.RefreshExpiresAt)
+	if parseErr != nil || !refreshExpiresAt.After(time.Now()) {
+		return authorization{}, nil, newCommandError(
+			"AUTHORIZATION_EXPIRED",
+			"Your CLI authorization expired. Run \"nore login\" again.",
+			nil,
+		)
+	}
+	return authorization{}, oauth, nil
 }
 
 func accessTokenReady(credentials store.OAuthCredentials) bool {
@@ -308,7 +367,15 @@ func credentialStoreError(err error) error {
 func notLoggedInError() error {
 	return newCommandError(
 		"NOT_LOGGED_IN",
-		"You are not signed in. Run \"nore login\" or configure a token with \"nore config set token <token>\".",
+		"No credentials are configured for the current registry. Run \"nore login\" or configure a token with \"nore config set --token <token>\".",
+		nil,
+	)
+}
+
+func legacyManualTokenError() error {
+	return newCommandError(
+		"TOKEN_REGISTRY_REQUIRED",
+		"Your saved token is not associated with a registry. Run \"nore config set --token <token>\" to configure it for the current registry.",
 		nil,
 	)
 }

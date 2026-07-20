@@ -3,10 +3,12 @@ package store
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/norehq/cli/internal/config"
 	"github.com/norehq/cli/internal/home"
 )
 
@@ -22,12 +24,17 @@ type OAuthCredentials struct {
 	AccessToken      string `json:"accessToken"`
 	RefreshExpiresAt string `json:"refreshExpiresAt"`
 	RefreshToken     string `json:"refreshToken"`
-	Registry         string `json:"registry"`
+}
+
+type RegistryCredentials struct {
+	ManualToken string            `json:"manualToken,omitempty"`
+	OAuth       *OAuthCredentials `json:"oauth,omitempty"`
 }
 
 type Credentials struct {
-	ManualToken string            `json:"manualToken,omitempty"`
-	OAuth       *OAuthCredentials `json:"oauth,omitempty"`
+	Registries        map[string]RegistryCredentials `json:"registries,omitempty"`
+	LegacyManualToken string                         `json:"manualToken,omitempty"`
+	LegacyOAuth       *legacyOAuthCredentials        `json:"oauth,omitempty"`
 }
 
 type Store struct {
@@ -54,14 +61,22 @@ func (s Store) Load() (Credentials, error) {
 	if err := json.Unmarshal(payload, &credentials); err != nil {
 		return Credentials{}, err
 	}
-	if credentials.ManualToken == "" && credentials.OAuth == nil {
+	credentials, err = normalizeCredentials(credentials)
+	if err != nil {
+		return Credentials{}, err
+	}
+	if credentials.Empty() {
 		return Credentials{}, ErrNotConfigured
 	}
 	return credentials, nil
 }
 
 func (s Store) Save(credentials Credentials) error {
-	if strings.TrimSpace(credentials.ManualToken) == "" && credentials.OAuth == nil {
+	credentials, err := normalizeCredentials(credentials)
+	if err != nil {
+		return err
+	}
+	if credentials.Empty() {
 		return s.Delete()
 	}
 	path, err := s.Path()
@@ -99,6 +114,56 @@ func (s Store) Save(credentials Credentials) error {
 		return err
 	}
 	return nil
+}
+
+func (c Credentials) Empty() bool {
+	return len(c.Registries) == 0 && strings.TrimSpace(c.LegacyManualToken) == "" && c.LegacyOAuth == nil
+}
+
+func (c Credentials) ForRegistry(registry string) (RegistryCredentials, error) {
+	registry, err := config.NormalizeRegistry(registry)
+	if err != nil {
+		return RegistryCredentials{}, err
+	}
+	return c.Registries[registry], nil
+}
+
+func (c *Credentials) SetRegistry(registry string, credentials RegistryCredentials) error {
+	registry, err := config.NormalizeRegistry(registry)
+	if err != nil {
+		return err
+	}
+	credentials.ManualToken = strings.TrimSpace(credentials.ManualToken)
+	if credentials.ManualToken == "" && credentials.OAuth == nil {
+		delete(c.Registries, registry)
+		return nil
+	}
+	if c.Registries == nil {
+		c.Registries = make(map[string]RegistryCredentials)
+	}
+	c.Registries[registry] = credentials
+	return nil
+}
+
+func normalizeCredentials(credentials Credentials) (Credentials, error) {
+	normalized := make(map[string]RegistryCredentials, len(credentials.Registries))
+	for registry, registryCredentials := range credentials.Registries {
+		normalizedRegistry, err := config.NormalizeRegistry(registry)
+		if err != nil {
+			return Credentials{}, fmt.Errorf("invalid credentials registry: %w", err)
+		}
+		if _, exists := normalized[normalizedRegistry]; exists {
+			return Credentials{}, errors.New("duplicate normalized credentials registry")
+		}
+		registryCredentials.ManualToken = strings.TrimSpace(registryCredentials.ManualToken)
+		if registryCredentials.ManualToken == "" && registryCredentials.OAuth == nil {
+			continue
+		}
+		normalized[normalizedRegistry] = registryCredentials
+	}
+	credentials.Registries = normalized
+	credentials.LegacyManualToken = strings.TrimSpace(credentials.LegacyManualToken)
+	return credentials, nil
 }
 
 func (s Store) Delete() error {

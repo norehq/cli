@@ -10,6 +10,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/norehq/cli/internal/config"
 )
 
 const (
@@ -31,13 +33,37 @@ type legacyOAuthCredentials struct {
 }
 
 func (s Store) MigrateLegacy(ctx context.Context) (bool, error) {
+	credentials, err := s.Load()
+	if err == nil {
+		if credentials.LegacyOAuth == nil {
+			return false, nil
+		}
+		registry, oauth, err := migrateOAuth(credentials.LegacyOAuth)
+		if err != nil {
+			return false, err
+		}
+		registryCredentials, err := credentials.ForRegistry(registry)
+		if err != nil {
+			return false, err
+		}
+		if registryCredentials.OAuth != nil {
+			return false, errors.New("legacy OAuth credentials conflict with registry credentials")
+		}
+		registryCredentials.OAuth = oauth
+		if err := credentials.SetRegistry(registry, registryCredentials); err != nil {
+			return false, err
+		}
+		credentials.LegacyOAuth = nil
+		if err := s.Save(credentials); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if !errors.Is(err, ErrNotConfigured) {
+		return false, err
+	}
 	if !s.legacyMigrationAllowed() {
 		return false, nil
-	}
-	if _, err := s.Load(); err == nil {
-		return false, nil
-	} else if !errors.Is(err, ErrNotConfigured) {
-		return false, err
 	}
 	directory, err := legacyDirectory()
 	if err != nil {
@@ -47,17 +73,19 @@ func (s Store) MigrateLegacy(ctx context.Context) (bool, error) {
 	credentialsPath := filepath.Join(directory, "credentials.json")
 	manualToken := legacyManualToken(configPath)
 	oauth, _ := legacyOAuth(ctx, credentialsPath)
-	credentials := Credentials{ManualToken: manualToken}
+	credentials = Credentials{LegacyManualToken: manualToken}
 	if oauth != nil {
-		credentials.OAuth = &OAuthCredentials{
-			AccessExpiresAt:  oauth.AccessExpiresAt,
-			AccessToken:      oauth.AccessToken,
-			RefreshExpiresAt: oauth.RefreshExpiresAt,
-			RefreshToken:     oauth.RefreshToken,
-			Registry:         oauth.Registry,
+		registry, migratedOAuth, err := migrateOAuth(oauth)
+		if err != nil {
+			return false, err
+		}
+		if err := credentials.SetRegistry(registry, RegistryCredentials{
+			OAuth: migratedOAuth,
+		}); err != nil {
+			return false, err
 		}
 	}
-	if credentials.ManualToken == "" && credentials.OAuth == nil {
+	if credentials.Empty() {
 		return false, nil
 	}
 	if err := s.Save(credentials); err != nil {
@@ -67,6 +95,26 @@ func (s Store) MigrateLegacy(ctx context.Context) (bool, error) {
 	_ = removeLegacyFile(s, credentialsPath)
 	deleteLegacyKeychain(ctx)
 	return true, nil
+}
+
+func migrateOAuth(credentials *legacyOAuthCredentials) (string, *OAuthCredentials, error) {
+	if credentials.AccessToken == "" || credentials.RefreshToken == "" || credentials.RefreshExpiresAt == "" {
+		return "", nil, errors.New("legacy OAuth credentials are incomplete")
+	}
+	registryValue := credentials.Registry
+	if strings.TrimSpace(registryValue) == "" {
+		registryValue = config.DefaultRegistry
+	}
+	registry, err := config.NormalizeRegistry(registryValue)
+	if err != nil {
+		return "", nil, err
+	}
+	return registry, &OAuthCredentials{
+		AccessExpiresAt:  credentials.AccessExpiresAt,
+		AccessToken:      credentials.AccessToken,
+		RefreshExpiresAt: credentials.RefreshExpiresAt,
+		RefreshToken:     credentials.RefreshToken,
+	}, nil
 }
 
 func (s Store) legacyMigrationAllowed() bool {

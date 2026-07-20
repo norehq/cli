@@ -12,9 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"charm.land/huh/v2"
 	"github.com/norehq/cli/internal/browser"
-	"github.com/norehq/cli/internal/config"
 	"github.com/norehq/cli/internal/store"
 	"github.com/spf13/cobra"
 )
@@ -39,21 +37,14 @@ type callbackServer struct {
 }
 
 func (a *app) loginCommand() *cobra.Command {
-	var registryInput string
 	command := &cobra.Command{
 		Use:   "login",
-		Short: "Sign in through the browser",
+		Short: "Sign in to the configured registry through the browser",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			registry, err := a.registry()
 			if err != nil {
 				return err
-			}
-			if command.Flags().Changed("registry") {
-				registry, err = a.configStore.SetRegistry(registryInput)
-				if err != nil {
-					return newCommandError("INVALID_REGISTRY", "The registry URL is invalid.", err.Error())
-				}
 			}
 			ctx, cancel := context.WithTimeout(command.Context(), authorizationTimeout)
 			defer cancel()
@@ -115,14 +106,21 @@ func (a *app) loginCommand() *cobra.Command {
 			if err != nil {
 				return apiCommandError(err)
 			}
-			credentials := store.Credentials{OAuth: &store.OAuthCredentials{
+			oauth := &store.OAuthCredentials{
 				AccessExpiresAt:  time.Now().Add(time.Duration(tokens.ExpiresIn) * time.Second).Format(time.RFC3339Nano),
 				AccessToken:      tokens.AccessToken,
 				RefreshExpiresAt: tokens.RefreshExpiresAt.Format(time.RFC3339Nano),
 				RefreshToken:     tokens.RefreshToken,
-				Registry:         registry,
-			}}
-			if err := a.saveCredentials(ctx, credentials); err != nil {
+			}
+			if err := a.updateCredentials(ctx, func(credentials *store.Credentials) error {
+				registryCredentials, err := credentials.ForRegistry(registry)
+				if err != nil {
+					return err
+				}
+				registryCredentials.ManualToken = ""
+				registryCredentials.OAuth = oauth
+				return credentials.SetRegistry(registry, registryCredentials)
+			}); err != nil {
 				return err
 			}
 			result := map[string]any{
@@ -136,7 +134,6 @@ func (a *app) loginCommand() *cobra.Command {
 			}))
 		},
 	}
-	command.Flags().StringVar(&registryInput, "registry", config.DefaultRegistry, "registry URL for this login")
 	command.Flags().SortFlags = false
 	return command
 }
@@ -145,29 +142,39 @@ func (a *app) logoutCommand() *cobra.Command {
 	var yes bool
 	command := &cobra.Command{
 		Use:   "logout",
-		Short: "Revoke the browser login and clear saved credentials",
+		Short: "Revoke the browser login for the configured registry",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
+			registry, err := a.registry()
+			if err != nil {
+				return err
+			}
 			ctx, cancel := a.context(command.Context())
 			defer cancel()
 			if _, err := a.credentialStore.MigrateLegacy(ctx); err != nil {
 				return credentialStoreError(err)
 			}
 			credentials, err := a.credentialStore.Load()
-			if errors.Is(err, store.ErrNotConfigured) || (err == nil && credentials.OAuth == nil) {
+			if errors.Is(err, store.ErrNotConfigured) {
 				return notLoggedInError()
 			}
 			if err != nil {
 				return credentialStoreError(err)
 			}
+			registryCredentials, err := credentials.ForRegistry(registry)
+			if err != nil {
+				return credentialStoreError(err)
+			}
+			if registryCredentials.OAuth == nil {
+				return notLoggedInError()
+			}
 			if !a.json && !yes {
-				confirmed := false
-				if err := huh.NewConfirm().
-					Title("Revoke this Nore CLI login?").
-					Affirmative("Revoke").
-					Negative("Cancel").
-					Value(&confirmed).
-					Run(); err != nil {
+				confirmed, err := promptForConfirmation(
+					command.InOrStdin(),
+					command.ErrOrStderr(),
+					"Revoke the Nore CLI login for the current registry?",
+				)
+				if err != nil {
 					return newCommandError("PROMPT_FAILED", "The logout confirmation could not be shown.", err.Error())
 				}
 				if !confirmed {
@@ -179,13 +186,13 @@ func (a *app) logoutCommand() *cobra.Command {
 			}
 			remoteRevoked := false
 			var remoteIssue any
-			auth, authErr := a.oauthAuthorization(ctx, "")
+			auth, authErr := a.oauthAuthorization(ctx, registry, "")
 			if authErr == nil {
-				revokeErr := a.client(auth.registry).RevokeCurrentCredential(ctx, auth.token)
+				revokeErr := a.client(registry).RevokeCurrentCredential(ctx, auth.token)
 				if isUnauthorized(revokeErr) {
-					refreshed, refreshErr := a.oauthAuthorization(ctx, auth.token)
+					refreshed, refreshErr := a.oauthAuthorization(ctx, registry, auth.token)
 					if refreshErr == nil {
-						revokeErr = a.client(refreshed.registry).RevokeCurrentCredential(ctx, refreshed.token)
+						revokeErr = a.client(registry).RevokeCurrentCredential(ctx, refreshed.token)
 					} else {
 						revokeErr = refreshErr
 					}
@@ -202,7 +209,7 @@ func (a *app) logoutCommand() *cobra.Command {
 				view, _ := errorView(authErr)
 				remoteIssue = view
 			}
-			if err := a.clearOAuth(ctx); err != nil {
+			if err := a.clearOAuth(ctx, registry); err != nil {
 				return err
 			}
 			result := map[string]any{
@@ -267,7 +274,10 @@ func membershipLabel(level string) string {
 	}
 }
 
-func (a *app) saveCredentials(ctx context.Context, credentials store.Credentials) (err error) {
+func (a *app) updateCredentials(
+	ctx context.Context,
+	update func(*store.Credentials) error,
+) (err error) {
 	if _, migrationErr := a.credentialStore.MigrateLegacy(ctx); migrationErr != nil {
 		return credentialStoreError(migrationErr)
 	}
@@ -280,34 +290,30 @@ func (a *app) saveCredentials(ctx context.Context, credentials store.Credentials
 			err = credentialStoreError(unlockErr)
 		}
 	}()
+	credentials, err := a.credentialStore.Load()
+	if errors.Is(err, store.ErrNotConfigured) {
+		credentials = store.Credentials{}
+	} else if err != nil {
+		return credentialStoreError(err)
+	}
+	if err := update(&credentials); err != nil {
+		return credentialStoreError(err)
+	}
 	if err := a.credentialStore.Save(credentials); err != nil {
 		return credentialStoreError(err)
 	}
 	return nil
 }
 
-func (a *app) clearOAuth(ctx context.Context) (err error) {
-	lock, err := a.credentialStore.Lock(ctx)
-	if err != nil {
-		return credentialStoreError(err)
-	}
-	defer func() {
-		if unlockErr := lock.Unlock(); err == nil && unlockErr != nil {
-			err = credentialStoreError(unlockErr)
+func (a *app) clearOAuth(ctx context.Context, registry string) error {
+	return a.updateCredentials(ctx, func(credentials *store.Credentials) error {
+		registryCredentials, err := credentials.ForRegistry(registry)
+		if err != nil {
+			return err
 		}
-	}()
-	credentials, err := a.credentialStore.Load()
-	if errors.Is(err, store.ErrNotConfigured) {
-		return nil
-	}
-	if err != nil {
-		return credentialStoreError(err)
-	}
-	credentials.OAuth = nil
-	if err := a.credentialStore.Save(credentials); err != nil {
-		return credentialStoreError(err)
-	}
-	return nil
+		registryCredentials.OAuth = nil
+		return credentials.SetRegistry(registry, registryCredentials)
+	})
 }
 
 func startCallbackServer() (*callbackServer, error) {

@@ -32,7 +32,15 @@ go run ./cmd/nore --help
 For local API development:
 
 ```sh
-go run ./cmd/nore login --registry http://127.0.0.1:3001
+go run ./cmd/nore config set --registry http://127.0.0.1:3001
+go run ./cmd/nore login
+```
+
+The registry is configuration, not a per-command override. Restore the
+production API when local testing is complete:
+
+```sh
+go run ./cmd/nore config set --registry https://api.nore.sh
 ```
 
 ## Releases

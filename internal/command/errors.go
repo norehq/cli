@@ -41,7 +41,7 @@ func apiCommandError(err error) error {
 	return newCommandError(
 		"NETWORK_ERROR",
 		"Nore API could not be reached.",
-		err.Error(),
+		nil,
 	)
 }
 
