@@ -13,7 +13,6 @@ import (
 const (
 	credentialsPathEnvironment = "NORE_CREDENTIALS_PATH"
 	directoryMode              = 0o700
-	fileMode                   = 0o600
 )
 
 var ErrNotConfigured = errors.New("no saved credentials")
@@ -49,9 +48,6 @@ func (s Store) Load() (Credentials, error) {
 		return Credentials{}, ErrNotConfigured
 	}
 	if err != nil {
-		return Credentials{}, err
-	}
-	if err := os.Chmod(path, fileMode); err != nil {
 		return Credentials{}, err
 	}
 	var credentials Credentials
@@ -90,9 +86,6 @@ func (s Store) Save(credentials Credentials) error {
 		_ = temporary.Close()
 		_ = os.Remove(temporaryPath)
 	}()
-	if err := temporary.Chmod(fileMode); err != nil {
-		return err
-	}
 	if _, err := temporary.Write(payload); err != nil {
 		return err
 	}
@@ -105,7 +98,7 @@ func (s Store) Save(credentials Credentials) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	return os.Chmod(path, fileMode)
+	return nil
 }
 
 func (s Store) Delete() error {

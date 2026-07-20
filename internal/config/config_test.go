@@ -1,9 +1,7 @@
 package config
 
 import (
-	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 )
 
@@ -37,7 +35,7 @@ func TestNormalizeRegistry(t *testing.T) {
 	}
 }
 
-func TestStoreWritesPrivateConfiguration(t *testing.T) {
+func TestStoreRoundTrip(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "nore", "config.json")
 	store := Store{FilePath: path}
@@ -54,14 +52,5 @@ func TestStoreWritesPrivateConfiguration(t *testing.T) {
 	}
 	if values.Registry != DefaultRegistry {
 		t.Fatalf("Load().Registry = %q", values.Registry)
-	}
-	if runtime.GOOS != "windows" {
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if info.Mode().Perm() != 0o600 {
-			t.Fatalf("config mode = %o", info.Mode().Perm())
-		}
 	}
 }

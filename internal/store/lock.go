@@ -22,12 +22,8 @@ func (s Store) Lock(ctx context.Context) (*CredentialLock, error) {
 	if err := os.MkdirAll(filepath.Dir(path), directoryMode); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, fileMode)
+	file, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o666)
 	if err != nil {
-		return nil, err
-	}
-	if err := file.Chmod(fileMode); err != nil {
-		_ = file.Close()
 		return nil, err
 	}
 	for {

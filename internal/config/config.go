@@ -16,7 +16,6 @@ const (
 	DefaultRegistry = "https://api.nore.sh"
 	pathEnvironment = "NORE_CONFIG_PATH"
 	directoryMode   = 0o700
-	fileMode        = 0o600
 )
 
 var ErrInvalidRegistry = errors.New("invalid registry")
@@ -144,9 +143,6 @@ func (s Store) write(values Values) error {
 		_ = temporary.Close()
 		_ = os.Remove(temporaryPath)
 	}()
-	if err := temporary.Chmod(fileMode); err != nil {
-		return err
-	}
 	if _, err := temporary.Write(payload); err != nil {
 		return err
 	}
@@ -159,5 +155,5 @@ func (s Store) write(values Values) error {
 	if err := os.Rename(temporaryPath, path); err != nil {
 		return err
 	}
-	return os.Chmod(path, fileMode)
+	return nil
 }
