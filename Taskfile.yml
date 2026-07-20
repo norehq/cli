@@ -30,6 +30,57 @@ tasks:
     dir: dist
     cmd: go build -trimpath -o ./nore{{exeExt}} ../cmd/nore
 
+  dev-bin:
+    desc: Build and link the local CLI into ~/.local/bin
+    platforms:
+      - darwin
+      - linux
+    deps:
+      - build
+    vars:
+      DEV_BIN: "{{.HOME}}/.local/bin/nore{{exeExt}}"
+      DEV_TARGET: "{{.ROOT_DIR}}/dist/nore{{exeExt}}"
+    cmds:
+      - |
+        set -eu
+        if [ -L "{{.DEV_BIN}}" ] && [ "$(readlink "{{.DEV_BIN}}")" = "{{.DEV_TARGET}}" ]; then
+          echo "Nore dev bin already links to {{.DEV_TARGET}}"
+          exit 0
+        fi
+        if [ -e "{{.DEV_BIN}}" ] || [ -L "{{.DEV_BIN}}" ]; then
+          echo "Refusing to replace the existing file at {{.DEV_BIN}}" >&2
+          exit 1
+        fi
+        mkdir -p "{{.HOME}}/.local/bin"
+        ln -s "{{.DEV_TARGET}}" "{{.DEV_BIN}}"
+        echo "Linked {{.DEV_BIN}} to {{.DEV_TARGET}}"
+
+  dev-bin-remove:
+    desc: Remove the local CLI link from ~/.local/bin
+    platforms:
+      - darwin
+      - linux
+    vars:
+      DEV_BIN: "{{.HOME}}/.local/bin/nore{{exeExt}}"
+      DEV_TARGET: "{{.ROOT_DIR}}/dist/nore{{exeExt}}"
+    cmds:
+      - |
+        set -eu
+        if [ ! -L "{{.DEV_BIN}}" ]; then
+          if [ -e "{{.DEV_BIN}}" ]; then
+            echo "Refusing to remove the non-link file at {{.DEV_BIN}}" >&2
+            exit 1
+          fi
+          echo "No Nore dev bin link exists at {{.DEV_BIN}}"
+          exit 0
+        fi
+        if [ "$(readlink "{{.DEV_BIN}}")" != "{{.DEV_TARGET}}" ]; then
+          echo "Refusing to remove a link that does not point to {{.DEV_TARGET}}" >&2
+          exit 1
+        fi
+        unlink "{{.DEV_BIN}}"
+        echo "Removed {{.DEV_BIN}}"
+
   build-info:
     desc: Inspect metadata embedded in a local CLI build
     deps:
